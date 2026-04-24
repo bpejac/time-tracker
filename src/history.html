@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Time Tracker — History</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      html, body { height: 100%; overflow: hidden; }
+    </style>
+  </head>
+  <body class="bg-gray-900 text-gray-100 h-full flex flex-col p-4 gap-3 select-none">
+    <div class="flex items-baseline gap-3 flex-shrink-0">
+      <h1 class="text-sm font-semibold tracking-widest text-gray-400 uppercase">Last 7 Days</h1>
+    </div>
+
+    <div id="calendar" class="flex flex-1 min-h-0 gap-2">
+      <div class="text-xs text-gray-500 self-center ml-4">Loading…</div>
+    </div>
+
+    <!-- Fixed follow-cursor tooltip -->
+    <div
+      id="tooltip"
+      class="fixed z-50 pointer-events-none hidden bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-xs shadow-xl"
+    >
+      <div id="tt-time" class="text-gray-100 font-medium tabular-nums"></div>
+      <div id="tt-dur" class="text-gray-400 mt-0.5"></div>
+    </div>
+
+    <script src="history.js"></script>
+  </body>
+</html>
