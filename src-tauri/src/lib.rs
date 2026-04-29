@@ -264,6 +264,42 @@ mod macos {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// If the app was killed mid-session the log ends with an unclosed work_start.
+// Close it with a synthetic work_stop so subsequent reads credit the time.
+fn heal_unclosed_session(data_dir: &PathBuf, today: &str) {
+    let log_path = data_dir.join(format!("{}.jsonl", today));
+    let content = match fs::read_to_string(&log_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut last_start: Option<DateTime<Utc>> = None;
+    for line in content.lines() {
+        if let Ok(entry) = serde_json::from_str::<LogEntry>(line) {
+            match entry.event.as_str() {
+                "work_start" => last_start = Some(entry.ts),
+                "work_stop" => last_start = None,
+                _ => {}
+            }
+        }
+    }
+
+    if last_start.is_none() {
+        return;
+    }
+
+    let entry = LogEntry {
+        ts: Utc::now(),
+        event: "work_stop".to_string(),
+        reason: "crash_recovery".to_string(),
+    };
+    if let Ok(line) = serde_json::to_string(&entry) {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(f, "{}", line);
+        }
+    }
+}
+
 fn compute_today_secs(data_dir: &PathBuf, today: &str) -> i64 {
     let log_path = data_dir.join(format!("{}.jsonl", today));
     let content = match fs::read_to_string(&log_path) {
@@ -408,6 +444,7 @@ pub fn run() {
                 .unwrap_or_default();
 
             let today = Tracker::today_key();
+            heal_unclosed_session(&data_dir, &today);
             let today_secs = compute_today_secs(&data_dir, &today);
 
             let status_text = if saved.paused { "⏸ Paused" } else { "● Tracking" };
