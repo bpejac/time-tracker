@@ -10,8 +10,13 @@
     </style>
   </head>
   <body class="bg-gray-900 text-gray-100 h-full flex flex-col p-4 gap-3 select-none">
-    <div class="flex items-baseline gap-3 flex-shrink-0">
-      <h1 class="text-sm font-semibold tracking-widest text-gray-400 uppercase">Last 7 Days</h1>
+    <div class="flex items-center gap-3 flex-shrink-0">
+      <div class="flex items-center gap-1">
+        <button id="btn-prev" class="text-xs px-2.5 py-1 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 disabled:text-gray-600 disabled:border-gray-700 disabled:opacity-50 disabled:cursor-default transition-colors">← Prev</button>
+        <button id="btn-next" class="text-xs px-2.5 py-1 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 disabled:text-gray-600 disabled:border-gray-700 disabled:opacity-50 disabled:cursor-default transition-colors" disabled>Next →</button>
+        <button id="btn-current" class="text-xs px-2.5 py-1 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:border-gray-400 disabled:text-gray-600 disabled:border-gray-700 disabled:opacity-50 disabled:cursor-default transition-colors" disabled>Current Week</button>
+      </div>
+      <span id="range-label" class="text-sm font-semibold tracking-widest text-gray-400 uppercase">Last 7 Days</span>
     </div>
 
     <div id="calendar" class="flex flex-1 min-h-0 gap-2">

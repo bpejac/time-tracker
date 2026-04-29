@@ -5,6 +5,7 @@ const { invoke } = window.__TAURI__.core;
 const START_HOUR = 6;
 const END_HOUR = 23;
 const RANGE_MIN = (END_HOUR - START_HOUR) * 60;
+const SHORT_GAP_SECS = 300;
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -38,10 +39,29 @@ function topPct(iso) {
   return Math.max(0, Math.min(100, ((mins - START_HOUR * 60) / RANGE_MIN) * 100));
 }
 
+function mergeShortGaps(segments) {
+  const merged = [];
+  for (const seg of segments) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.end) {
+      const gap = Math.round((new Date(seg.start) - new Date(prev.end)) / 1000);
+      if (gap > 0 && gap < SHORT_GAP_SECS) {
+        prev.end = seg.end;
+        continue;
+      }
+    }
+    merged.push({ ...seg });
+  }
+  return merged;
+}
+
+const MIN_BLOCK_SECS = 300;
+
 function totalSecsForDay(segments) {
   return segments.reduce((acc, seg) => {
     if (!seg.end) return acc;
-    return acc + Math.round((new Date(seg.end) - new Date(seg.start)) / 1000);
+    const secs = Math.round((new Date(seg.end) - new Date(seg.start)) / 1000);
+    return acc + secs;
   }, 0);
 }
 
@@ -70,18 +90,18 @@ function hideTt() { ttEl.classList.add('hidden'); }
 
 function buildSegment(seg, isToday) {
   const top = topPct(seg.start);
-  const height = Math.max(0.4, topPct(seg.end) - top);
+  const height = topPct(seg.end) - top;
 
   const el = document.createElement('div');
   el.className = [
     'absolute rounded-sm cursor-default transition-colors duration-100',
     isToday ? 'bg-blue-500 hover:bg-blue-400' : 'bg-sky-800 hover:bg-sky-700',
   ].join(' ');
-  el.style.cssText = `top:${top}%;height:${height}%;left:3px;right:3px;`;
+  el.style.cssText = `top:${top}%;height:max(${height}%,6px);left:3px;right:3px;`;
 
+  const actualSecs = Math.round((new Date(seg.end) - new Date(seg.start)) / 1000);
   const timeStr = `${fmtTime(seg.start)} – ${fmtTime(seg.end)}`;
-  const durStr = fmtDur(seg.start, seg.end);
-
+  const durStr = fmtTotal(Math.max(actualSecs, MIN_BLOCK_SECS));
   el.addEventListener('mouseenter', (e) => showTt(timeStr, durStr, e.clientX, e.clientY));
   el.addEventListener('mousemove', (e) => moveTt(e.clientX, e.clientY));
   el.addEventListener('mouseleave', hideTt);
@@ -95,17 +115,12 @@ function buildCalendar(history) {
 
   // ── Time-label column ──
   const labelsCol = document.createElement('div');
-  labelsCol.className = 'flex flex-col flex-shrink-0';
+  labelsCol.className = 'relative flex-shrink-0';
   labelsCol.style.width = '28px';
 
-  // Spacer matching the day-header row height
-  const spacer = document.createElement('div');
-  spacer.className = 'flex-shrink-0';
-  spacer.style.height = '60px';
-  labelsCol.appendChild(spacer);
-
   const labelsArea = document.createElement('div');
-  labelsArea.className = 'relative flex-1';
+  labelsArea.className = 'absolute inset-x-0 bottom-0';
+  labelsArea.style.top = '60px';
 
   for (let h = START_HOUR; h <= END_HOUR; h++) {
     const pct = ((h - START_HOUR) / (END_HOUR - START_HOUR)) * 100;
@@ -120,19 +135,21 @@ function buildCalendar(history) {
 
   // ── Day columns container ──
   const dayData = document.createElement('div');
-  dayData.className = 'flex flex-col flex-1 min-w-0';
+  dayData.className = 'relative flex-1 min-w-0';
 
   const headersRow = document.createElement('div');
-  headersRow.className = 'flex gap-2 flex-shrink-0';
+  headersRow.className = 'absolute inset-x-0 top-0 flex gap-2';
   headersRow.style.height = '60px';
 
   const gridsRow = document.createElement('div');
-  gridsRow.className = 'flex flex-1 gap-2 min-h-0';
+  gridsRow.className = 'absolute inset-x-0 bottom-0 flex gap-2';
+  gridsRow.style.top = '60px';
 
   history.forEach((day) => {
     const isToday = day.date === todayStr;
     const date = new Date(day.date + 'T12:00:00');
-    const secs = totalSecsForDay(day.segments);
+    const segments = mergeShortGaps(day.segments);
+    const secs = totalSecsForDay(segments);
 
     // Header cell
     const header = document.createElement('div');
@@ -159,7 +176,7 @@ function buildCalendar(history) {
     }
 
     // Segment blocks
-    day.segments.forEach((seg) => {
+    segments.forEach((seg) => {
       if (!seg.end) return;
       grid.appendChild(buildSegment(seg, isToday));
     });
@@ -172,11 +189,38 @@ function buildCalendar(history) {
   cal.appendChild(dayData);
 }
 
+// ── Navigation ────────────────────────────────────────────────────────────────
+
+let weekOffset = 0;
+
+const rangeLabel = document.getElementById('range-label');
+const btnPrev = document.getElementById('btn-prev');
+const btnNext = document.getElementById('btn-next');
+const btnCurrent = document.getElementById('btn-current');
+
+function updateNavButtons() {
+  btnNext.disabled = weekOffset === 0;
+  btnCurrent.disabled = weekOffset === 0;
+}
+
+btnPrev.addEventListener('click', () => { weekOffset++; main(); });
+btnNext.addEventListener('click', () => { if (weekOffset > 0) { weekOffset--; main(); } });
+btnCurrent.addEventListener('click', () => { weekOffset = 0; main(); });
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   try {
-    const history = await invoke('get_history');
+    const history = await invoke('get_history', { weekOffset });
+    if (weekOffset === 0) {
+      rangeLabel.textContent = 'Last 7 Days';
+    } else {
+      const first = new Date(history[0].date + 'T12:00:00');
+      const last = new Date(history[history.length - 1].date + 'T12:00:00');
+      rangeLabel.textContent =
+        `${MONTH_NAMES[first.getMonth()]} ${first.getDate()} – ${MONTH_NAMES[last.getMonth()]} ${last.getDate()}`;
+    }
+    updateNavButtons();
     buildCalendar(history);
   } catch (err) {
     document.getElementById('calendar').innerHTML =
@@ -185,3 +229,4 @@ async function main() {
 }
 
 main();
+setInterval(main, 10_000);

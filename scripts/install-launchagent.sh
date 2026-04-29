@@ -4,15 +4,19 @@
 
 set -e
 
-APP_PATH="$(cd "$(dirname "$0")/.." && pwd)/src-tauri/target/release/bundle/macos/time-tracker.app"
-BINARY="$APP_PATH/Contents/MacOS/time-tracker"
+BUILD_APP="$(cd "$(dirname "$0")/.." && pwd)/src-tauri/target/release/bundle/macos/time-tracker.app"
+INSTALLED_APP="/Applications/time-tracker.app"
+BINARY="$INSTALLED_APP/Contents/MacOS/time-tracker"
 PLIST="$HOME/Library/LaunchAgents/com.timetracker.app.plist"
 
-if [ ! -f "$BINARY" ]; then
-  echo "Binary not found at $BINARY"
+if [ ! -d "$BUILD_APP" ]; then
+  echo "App not found at $BUILD_APP"
   echo "Run 'npm run tauri build' first."
   exit 1
 fi
+
+echo "Copying time-tracker.app to /Applications..."
+cp -R "$BUILD_APP" /Applications/
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -30,6 +30,7 @@ struct LogEntry {
 struct Tracker {
     paused: bool,
     session_start: Option<DateTime<Utc>>,
+    last_stop: Option<DateTime<Utc>>,
     today_secs: i64,
     today_date: String,
     data_dir: PathBuf,
@@ -54,6 +55,12 @@ impl Tracker {
         if self.session_start.is_some() {
             return;
         }
+        if let Some(last_stop) = self.last_stop.take() {
+            let gap = (Utc::now() - last_stop).num_seconds();
+            if gap > 0 && gap < 300 {
+                self.today_secs += gap;
+            }
+        }
         self.session_start = Some(Utc::now());
         self.append_log("work_start", reason);
         self.do_refresh();
@@ -64,6 +71,7 @@ impl Tracker {
             return;
         };
         self.today_secs += (Utc::now() - start).num_seconds().max(0);
+        self.last_stop = Some(Utc::now());
         self.append_log("work_stop", reason);
         self.do_refresh();
     }
@@ -125,6 +133,26 @@ impl Tracker {
 
     fn do_refresh(&self) {
         (self.refresh_menu)(self.paused, self.total_today_secs());
+    }
+
+    fn maybe_rollover(&mut self) {
+        let new_date = Self::today_key();
+        if new_date == self.today_date {
+            return;
+        }
+        // Only restart if a session was actively running at midnight (user working
+        // late). If the session was already stopped (screen locked, user asleep)
+        // do not auto-start one — on_screen_unlock will do that when they wake up.
+        let was_running = self.session_start.is_some();
+        if was_running {
+            self.stop("day_rollover");
+        }
+        self.today_date = new_date;
+        self.today_secs = 0;
+        self.last_stop = None;
+        if was_running && !self.paused {
+            self.start("day_rollover");
+        }
     }
 }
 
@@ -245,14 +273,24 @@ fn compute_today_secs(data_dir: &PathBuf, today: &str) -> i64 {
 
     let mut total = 0i64;
     let mut last_start: Option<DateTime<Utc>> = None;
+    let mut last_stop: Option<DateTime<Utc>> = None;
 
     for line in content.lines() {
         if let Ok(entry) = serde_json::from_str::<LogEntry>(line) {
             match entry.event.as_str() {
-                "work_start" => last_start = Some(entry.ts),
+                "work_start" => {
+                    if let Some(stop) = last_stop.take() {
+                        let gap = (entry.ts - stop).num_seconds();
+                        if gap > 0 && gap < 300 {
+                            total += gap;
+                        }
+                    }
+                    last_start = Some(entry.ts);
+                }
                 "work_stop" => {
                     if let Some(start) = last_start.take() {
                         total += (entry.ts - start).num_seconds().max(0);
+                        last_stop = Some(entry.ts);
                     }
                 }
                 _ => {}
@@ -319,16 +357,19 @@ fn read_day_segments(data_dir: &PathBuf, date: &str) -> Vec<TimeSegment> {
 }
 
 #[tauri::command]
-fn get_history() -> Vec<DayHistory> {
+fn get_history(week_offset: i64) -> Vec<DayHistory> {
     let (data_dir, today) = {
         let t = tracker().lock().unwrap();
         (t.data_dir.clone(), t.today_date.clone())
     };
 
+    let now = Local::now();
+    let days_since_monday = now.weekday().num_days_from_monday() as i64;
+    let week_start = now - Duration::days(days_since_monday + week_offset * 7);
+
     (0i64..7)
-        .rev()
-        .map(|days_ago| {
-            let date = (Local::now() - Duration::days(days_ago))
+        .map(|day_idx| {
+            let date = (week_start + Duration::days(day_idx))
                 .format("%Y-%m-%d")
                 .to_string();
             let is_today = date == today;
@@ -385,6 +426,8 @@ pub fn run() {
                 MenuItem::with_id(app, "toggle", toggle_text, true, None::<&str>)?;
             let history_item =
                 MenuItem::with_id(app, "history", "View History", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 app,
@@ -396,7 +439,7 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &history_item,
                     &PredefinedMenuItem::separator(app)?,
-                    // &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
+                    &quit_item,
                 ],
             )?;
 
@@ -460,6 +503,7 @@ pub fn run() {
             let tracker_arc = Arc::new(Mutex::new(Tracker {
                 paused: saved.paused,
                 session_start: None,
+                last_stop: None,
                 today_secs,
                 today_date: today,
                 data_dir,
@@ -481,11 +525,12 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             macos::register_screen_observer();
 
-            // Refresh "Today" display every minute.
+            // Refresh "Today" display every minute; also handles midnight rollover.
             let t_clone = tracker_arc.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(60));
-                if let Ok(t) = t_clone.lock() {
+                if let Ok(mut t) = t_clone.lock() {
+                    t.maybe_rollover();
                     t.do_refresh();
                 }
             });
